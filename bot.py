@@ -20,24 +20,50 @@ ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "0"))
 
 DATA_FILE = "tickets.json"
 
-SYSTEM_PROMPT = """Ты — ассистент по обработке авиабилетов. Пользователь присылает текст или изображение билета.
+SYSTEM_PROMPT = """Ты — ассистент по обработке авиабилетов. Пользователь присылает текст или изображение билета, либо команду для управления списком.
 
-Извлеки данные и верни ТОЛЬКО валидный JSON без markdown и блоков кода:
+Верни ТОЛЬКО валидный JSON без markdown и блоков кода.
+
+=== ДОБАВЛЕНИЕ БИЛЕТА ===
+Если пользователь присылает данные билета:
 {"action":"add","ticket":{"num":"номер","date":"YYYY-MM-DD","status":"Выписан","name":"ИМЯ ПАССАЖИРА","route":"XXX-XXX","company":"","price":0,"currency":"AZN","cu":0,"ca":0},"missing":[]}
 
-Правила:
+Правила добавления:
 - status: "Выписан", "Изменён" или "Отменён". По умолчанию "Выписан"
 - date: формат YYYY-MM-DD. Если не указана — сегодняшняя дата
-- name: латиница ЗАГЛАВНЫМИ (SURNAME/FIRSTNAME)
-- route: ЗАГЛАВНЫМИ, формат BAK-TBS или BAK-TBS-BAK
+- name: латиница в формате Firstname Lastname (первая буква заглавная, остальные строчные). Например: Ramazanov Elchin
+- route: формат Bak-Tbs или Bak-Tbs-Bak (первая буква каждого сегмента заглавная). Например: Bak-Tbs-Bak
 - price: итоговая сумма TOTAL из билета (в оригинальной валюте)
-- currency: валюта цены билета — AZN, EUR, USD, RUB или KZT. Определи по символу или тексту в билете. По умолчанию AZN.
-- cu: наша комиссия (всегда в AZN, если не указана — 0)
-- ca: комиссия агента (всегда в AZN, если не указана — 0)
+- currency: валюта — AZN, EUR, USD, RUB или KZT. По умолчанию AZN.
+- cu: наша комиссия в AZN (если не указана — 0)
+- ca: комиссия агента в AZN (если не указана — 0)
 - company: компания-заказчик (если не указана — пустая строка)
 - missing: список отсутствующих полей
 
-Если это не билет или вопрос: {"action":"chat","text":"твой ответ на русском"}"""
+=== УДАЛЕНИЕ БИЛЕТА ===
+Если пользователь хочет удалить конкретный билет (указывает имя/фамилию и/или маршрут):
+{"action":"delete","name":"Имя Пассажира (формат Ramazanov Elchin)","route":"Маршрут (формат Bak-Tbs)"}
+Поля name и route — поисковые критерии. Если указано только имя — ищи только по имени. Если только маршрут — только по маршруту.
+
+=== УДАЛЕНИЕ ВСЕГО ===
+Если пользователь пишет "удали всё", "очисти всё", "удалить все билеты" и т.п.:
+{"action":"delete_all"}
+
+=== ИЗМЕНЕНИЕ БИЛЕТА ===
+Если пользователь хочет изменить данные билета:
+{"action":"update","name":"Имя Пассажира (формат Ramazanov Elchin)","route":"Маршрут (формат Bak-Tbs)","fields":{"поле":"новое значение"}}
+Возможные поля для изменения: status, company, price, cu, ca, route, date
+Если пользователь пишет "исправь цену X на Y" или "цена должна быть Y" — это action:update с fields:{"price":Y}
+Пример: изменить статус Ivanov Ivan Bak-Tbs на Отменён → fields: {"status":"Отменён"}
+
+=== ВОЗВРАТ БИЛЕТА ===
+Если пользователь пишет "возврат", "это возврат", "верни X", "возврат X AZN" — рядом с данными билета или отдельно:
+{"action":"refund","name":"Имя Пассажира","route":"Bak-Tbs","amount":50}
+- amount: сумма возврата в AZN (число)
+- name и route — для поиска билета
+
+=== ДРУГОЕ ===
+Если это вопрос или непонятный текст: {"action":"chat","text":"твой ответ на русском"}"""
 
 
 def get_cbar_rates():
@@ -56,7 +82,6 @@ def get_cbar_rates():
                 nominal = float(nominal_el.text)
                 value = float(value_el.text.replace(",", "."))
                 rates[code] = value / nominal
-        logger.info(f"CBAR rates: {rates}")
         return rates
     except Exception as e:
         logger.error(f"CBAR error: {e}")
@@ -99,6 +124,25 @@ def money(v):
         return "0.00"
 
 
+def find_tickets(tickets, name=None, route=None):
+    results = []
+    for i, t in enumerate(tickets):
+        match = True
+        if name:
+            n = name.upper().strip()
+            tn = t.get("name", "").upper().strip()
+            if n not in tn and tn not in n:
+                match = False
+        if route:
+            r = route.upper().strip()
+            tr = t.get("route", "").upper().strip()
+            if r not in tr and tr not in r:
+                match = False
+        if match:
+            results.append(i)
+    return results
+
+
 async def parse_ticket_with_claude(text=None, image_data=None, image_mime=None):
     content = []
     if image_data:
@@ -123,7 +167,7 @@ def generate_excel(tickets):
     ws.title = "Билеты"
     headers = ["№", "Номер билета", "Дата", "Статус", "Пассажир", "Маршрут",
                "Компания", "Цена (ориг.)", "Валюта", "Курс", "Цена (AZN)",
-               "Ком. наша", "Ком. агента", "Компания должна нам", "Мы должны агенту"]
+               "Ком. наша", "Ком. агента", "Компания должна нам", "Мы должны агенту", "Возврат (AZN)"]
     header_fill = PatternFill(start_color="2C2C2A", end_color="2C2C2A", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
     for col, header in enumerate(headers, 1):
@@ -131,7 +175,7 @@ def generate_excel(tickets):
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
-    col_widths = [4, 18, 12, 11, 24, 14, 20, 12, 8, 8, 12, 12, 13, 20, 20]
+    col_widths = [4, 18, 12, 11, 24, 14, 20, 12, 8, 8, 12, 12, 13, 20, 20, 14]
     for i, width in enumerate(col_widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = width
     status_colors = {"Выписан": "E1F5EE", "Изменён": "FAEEDA", "Отменён": "FCEBEB"}
@@ -145,17 +189,18 @@ def generate_excel(tickets):
         owes_ag = price_azn + ca
         total_us += owes_us
         total_ag += owes_ag
+        refund = float(t.get("refund", 0))
         row_data = [
             row_idx - 1, t.get("num", ""), fmt_date(t.get("date", "")), t.get("status", ""),
             t.get("name", ""), t.get("route", ""), t.get("company", ""),
             float(t.get("price_orig", t.get("price", 0))), t.get("currency", "AZN"),
-            float(t.get("rate", 1.0)), price_azn, cu, ca, owes_us, owes_ag
+            float(t.get("rate", 1.0)), price_azn, cu, ca, owes_us, owes_ag, refund if refund else ""
         ]
         status = t.get("status", "")
         row_color = status_colors.get(status, "FFFFFF")
         for col, val in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
-            if col in [8, 10, 11, 12, 13, 14, 15]:
+            if col in [8, 10, 11, 12, 13, 14, 15] or (col == 16 and val != ""):
                 cell.number_format = '#,##0.00'
                 cell.alignment = Alignment(horizontal="right")
             if col == 4:
@@ -166,6 +211,10 @@ def generate_excel(tickets):
     ws.cell(row=total_row, column=14).font = Font(bold=True, color="0F6E56")
     ws.cell(row=total_row, column=15, value=total_ag).number_format = '#,##0.00'
     ws.cell(row=total_row, column=15).font = Font(bold=True, color="854F0B")
+    total_refund = sum(float(t.get("refund", 0)) for t in tickets)
+    if total_refund:
+        ws.cell(row=total_row, column=16, value=total_refund).number_format = '#,##0.00'
+        ws.cell(row=total_row, column=16).font = Font(bold=True, color="A32D2D")
     filename = f"tickets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     wb.save(filename)
     return filename
@@ -188,7 +237,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Фото или скриншот билета\n"
         "• Или текст с данными билета\n\n"
         "Цену автоматически переведу в AZN по курсу ЦБ Азербайджана.\n\n"
-        "Можно также указать комиссии:\n"
+        "Управление билетами:\n"
+        "• _удали Ramazanov Elchin Bak-Tbs_ — удалить билет\n"
+        "• _измени Ramazanov Elchin Bak-Tbs статус Отменён_ — изменить поле\n"
+        "• _удали всё_ — очистить список\n\n"
+        "Комиссии указывайте так:\n"
         "_наша комиссия 15, агенту 5, компания Evrascon_",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -236,7 +289,89 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, result: dict):
-    if result.get("action") == "add" and result.get("ticket"):
+    action = result.get("action")
+
+    if action == "refund":
+        tickets = load_tickets()
+        name = result.get("name", "")
+        route = result.get("route", "")
+        amount = float(result.get("amount", 0))
+        indices = find_tickets(tickets, name=name, route=route)
+        if not indices:
+            await update.message.reply_text("❌ Билет не найден. Проверьте имя или маршрут.")
+            return
+        for i in indices:
+            tickets[i]["status"] = "Отменён"
+            tickets[i]["refund"] = -abs(amount)
+        save_tickets(tickets)
+        lines = [f"↩️ Возврат оформлен: *-{money(amount)} AZN*"]
+        for i in indices:
+            t = tickets[i]
+            lines.append(f"• {t['name']} · {t['route']} · {fmt_date(t['date'])}\n  Статус → Отменён")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    if action == "delete_all":
+        save_tickets([])
+        await update.message.reply_text("🗑 Все билеты удалены.")
+        return
+
+    if action == "delete":
+        tickets = load_tickets()
+        name = result.get("name", "")
+        route = result.get("route", "")
+        indices = find_tickets(tickets, name=name, route=route)
+        if not indices:
+            await update.message.reply_text("❌ Билет не найден. Проверьте имя или маршрут.")
+            return
+        deleted = [tickets[i] for i in indices]
+        tickets = [t for i, t in enumerate(tickets) if i not in indices]
+        save_tickets(tickets)
+        lines = [f"🗑 Удалено {len(deleted)} билет(ов):"]
+        for t in deleted:
+            lines.append(f"• {t['name']} · {t['route']} · {fmt_date(t['date'])}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if action == "update":
+        tickets = load_tickets()
+        name = result.get("name", "")
+        route = result.get("route", "")
+        fields = result.get("fields", {})
+        indices = find_tickets(tickets, name=name, route=route)
+        if not indices:
+            await update.message.reply_text("❌ Билет не найден. Проверьте имя или маршрут.")
+            return
+        if not fields:
+            await update.message.reply_text("❌ Не указано что именно изменить.")
+            return
+        rates = get_cbar_rates()
+        for i in indices:
+            for field, value in fields.items():
+                tickets[i][field] = value
+            if "price" in fields:
+                currency = tickets[i].get("currency", "AZN")
+                new_price_azn, rate = convert_to_azn(float(fields["price"]), currency, rates)
+                tickets[i]["price_orig"] = float(fields["price"])
+                tickets[i]["price_azn"] = new_price_azn
+                tickets[i]["price"] = new_price_azn
+                tickets[i]["rate"] = rate
+            price_azn = float(tickets[i].get("price_azn", tickets[i].get("price", 0)))
+            cu = float(tickets[i].get("cu", 0))
+            ca = float(tickets[i].get("ca", 0))
+            tickets[i]["owesUs"] = price_azn + cu
+            tickets[i]["owesAgent"] = price_azn + ca
+        save_tickets(tickets)
+        field_names = {"status": "статус", "company": "компания", "price": "цена", "cu": "ком. наша", "ca": "ком. агента", "route": "маршрут", "date": "дата"}
+        changed = ", ".join([f"{field_names.get(k, k)}: {v}" for k, v in fields.items()])
+        lines = [f"✏️ Изменено {len(indices)} билет(ов): {changed}"]
+        for i in indices:
+            t = tickets[i]
+            lines.append(f"• {t['name']} · {t['route']} · {fmt_date(t['date'])}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if action == "add" and result.get("ticket"):
         t = result["ticket"]
         price_orig = float(t.get("price", 0))
         currency = t.get("currency", "AZN").upper()
@@ -288,10 +423,13 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
             f"{missing_note}"
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
-    elif result.get("action") == "chat":
+        return
+
+    if action == "chat":
         await update.message.reply_text(result.get("text", "Не понял запрос."))
-    else:
-        await update.message.reply_text("Не смог распознать билет. Попробуйте другой формат.")
+        return
+
+    await update.message.reply_text("Не смог распознать. Попробуйте другой формат.")
 
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
