@@ -703,10 +703,49 @@ async def list_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def email_check_job(bot: Bot):
+    """Следит за почтой через IMAP IDLE — реагирует мгновенно при новом письме."""
     while True:
-        await asyncio.sleep(900)
-        logger.info("Checking Gmail...")
-        await check_gmail(bot)
+        if not GMAIL_USER or not GMAIL_PASSWORD:
+            await asyncio.sleep(60)
+            continue
+        try:
+            loop = asyncio.get_event_loop()
+
+            def imap_idle():
+                mail = imaplib.IMAP4_SSL("imap.gmail.com")
+                mail.login(GMAIL_USER, GMAIL_PASSWORD)
+                mail.select("inbox")
+                # Отправляем IDLE команду
+                tag = mail._new_tag().decode()
+                mail.send(f"{tag} IDLE\r\n".encode())
+                # Ждём EXISTS (новое письмо) или таймаут 28 минут
+                mail.sock.settimeout(1680)
+                try:
+                    while True:
+                        line = mail.readline().decode(errors="ignore").strip()
+                        if not line:
+                            continue
+                        logger.info(f"IMAP IDLE: {line}")
+                        if "EXISTS" in line or "RECENT" in line:
+                            break
+                        if "BYE" in line or "OK" not in line and line.startswith("*") is False:
+                            break
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        mail.send(b"DONE\r\n")
+                        mail.logout()
+                    except Exception:
+                        pass
+
+            logger.info("IMAP IDLE: ожидаем новые письма...")
+            await loop.run_in_executor(None, imap_idle)
+            logger.info("IMAP IDLE: получено уведомление, проверяем почту...")
+            await check_gmail(bot)
+        except Exception as e:
+            logger.error(f"IMAP IDLE error: {e}")
+            await asyncio.sleep(30)  # при ошибке ждём 30 сек и переподключаемся
 
 
 async def post_init(application):
