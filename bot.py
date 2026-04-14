@@ -569,6 +569,42 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
 
     if action == "add" and result.get("ticket"):
         t = result["ticket"]
+
+        # Защита: если цена 0 и в базе уже есть билет с таким именем/маршрутом —
+        # это, скорее всего, команда обновить комиссии, а не новый билет.
+        price_orig_check = float(t.get("price", 0))
+        cu_check = float(t.get("cu", 0))
+        ca_check = float(t.get("ca", 0))
+        company_check = t.get("company", "")
+        if price_orig_check == 0 and (cu_check or ca_check or company_check):
+            existing = load_tickets()
+            name_check = t.get("name", "")
+            route_check = t.get("route", "")
+            indices = find_tickets(existing, name=name_check, route=route_check if route_check and route_check != "—" else None)
+            if indices:
+                fields = {}
+                if cu_check: fields["cu"] = cu_check
+                if ca_check: fields["ca"] = ca_check
+                if company_check and company_check != "—": fields["company"] = company_check
+                rates = get_cbar_rates()
+                for i in indices:
+                    existing[i].update(fields)
+                    price_azn = float(existing[i].get("price_azn", existing[i].get("price", 0)))
+                    existing[i]["owesUs"] = price_azn + float(existing[i].get("cu", 0))
+                    existing[i]["owesAgent"] = price_azn + float(existing[i].get("ca", 0))
+                save_tickets(existing)
+                field_names = {"cu": "ком. наша", "ca": "ком. агента", "company": "компания"}
+                changed = ", ".join([f"{field_names.get(k,k)}: {v}" for k,v in fields.items()])
+                lines = [f"✏️ Обновил {len(indices)} билет(ов): {changed}"]
+                for i in indices:
+                    tk = existing[i]
+                    line = (f"• {tk['name']} · {tk['route']} · {fmt_date(tk['date'])}\n"
+                            f"  💰 Цена: {money(tk.get('price_azn', tk.get('price',0)))} AZN · Ком. наша: {money(tk.get('cu',0))} · Ком. агента: {money(tk.get('ca',0))}\n"
+                            f"  🟢 Нам: {money(tk['owesUs'])} AZN · 🟡 Агенту: {money(tk['owesAgent'])} AZN")
+                    lines.append(line)
+                await update.message.reply_text("\n".join(lines))
+                return
+
         price_orig = float(t.get("price", 0))
         currency = t.get("currency", "AZN").upper()
         cu = float(t.get("cu", 0))
