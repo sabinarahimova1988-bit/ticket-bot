@@ -410,7 +410,7 @@ def generate_excel(tickets):
     if total_refund:
         ws.cell(row=total_row, column=16, value=total_refund).number_format = '#,##0.00'
         ws.cell(row=total_row, column=16).font = Font(bold=True, color="A32D2D")
-    filename = f"tickets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"/tmp/tickets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     wb.save(filename)
     return filename
 
