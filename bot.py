@@ -8,7 +8,7 @@ import imaplib
 import email
 from email.header import decode_header
 import urllib.request
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, Bot
@@ -18,7 +18,7 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_CLIENT = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+ANTHROPIC_CLIENT = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "0"))
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
@@ -220,8 +220,8 @@ def is_ticket_email(subject, text):
 
 async def parse_email_with_claude(email_text, subject):
     prompt = f"Тема письма: {subject}\n\nТекст письма:\n{email_text}"
-    response = ANTHROPIC_CLIENT.messages.create(
-        model="claude-opus-4-5",
+    response = await ANTHROPIC_CLIENT.messages.create(
+        model="claude-sonnet-4-5",
         max_tokens=1000,
         system=EMAIL_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}]
@@ -322,8 +322,10 @@ async def parse_ticket_with_claude(text=None, image_data=None, image_mime=None):
         content.append({"type": "text", "text": text})
     elif image_data:
         content.append({"type": "text", "text": "Распознай данные билета с этого изображения"})
-    response = ANTHROPIC_CLIENT.messages.create(
-        model="claude-opus-4-5",
+    if not content:
+        content.append({"type": "text", "text": "Помогите с билетом"})
+    response = await ANTHROPIC_CLIENT.messages.create(
+        model="claude-sonnet-4-5",
         max_tokens=1000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}]
@@ -651,7 +653,7 @@ async def email_check_job(bot: Bot):
 
 
 async def post_init(application):
-    asyncio.create_task(email_check_job(application.bot))
+    application.create_task(email_check_job(application.bot))
 
 
 def main():
