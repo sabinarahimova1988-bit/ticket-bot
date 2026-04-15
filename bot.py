@@ -14,8 +14,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import asyncio
-import psycopg2
-import psycopg2.extras
+import psycopg
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 def get_db():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg.connect(DATABASE_URL)
 
 def init_db():
     with get_db() as conn:
@@ -145,9 +144,9 @@ def convert_to_azn(amount, currency, rates):
 def load_tickets():
     try:
         with get_db() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT data FROM tickets ORDER BY (data->>'id')::bigint")
-                return [dict(row['data']) for row in cur.fetchall()]
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute("SELECT data FROM tickets ORDER BY (data->>\'id\')::bigint")
+                return [row['data'] for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"load_tickets error: {e}")
         return []
