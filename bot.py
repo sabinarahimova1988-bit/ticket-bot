@@ -49,7 +49,8 @@ def init_db():
 
 TICKET_KEYWORDS = ["ticket", "билет", "eticket", "e-ticket", "itinerary", "booking confirmation",
                    "flight confirmation", "маршрут", "бронирование", "azerbaijan airlines",
-                   "turkish airlines", "flydubai", "pegasus", "wizz", "lufthansa", "booking ref"]
+                   "turkish airlines", "flydubai", "pegasus", "wizz", "lufthansa", "booking ref",
+                   "flyarystan", "тарифный пакет", "номер билета", "electronic ticket", "маршрут-квитанция"]
 
 SYSTEM_PROMPT = """Ты — ассистент по обработке авиабилетов. Пользователь присылает текст или изображение билета, либо команду для управления списком.
 
@@ -295,6 +296,19 @@ async def parse_email_with_claude(email_text, subject):
     return json.loads(raw)
 
 
+def get_email_images(msg):
+    """Извлекает изображения из вложений письма."""
+    images = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            if ctype in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    images.append((base64.standard_b64encode(payload).decode("utf-8"), ctype))
+    return images
+
+
 async def check_gmail(bot: Bot):
     if not GMAIL_USER or not GMAIL_PASSWORD:
         return
@@ -318,11 +332,26 @@ async def check_gmail(bot: Bot):
             msg = email.message_from_bytes(raw_email)
             subject = decode_mime_words(msg.get("Subject", ""))
             email_text = get_email_text(msg)
-            if not is_ticket_email(subject, email_text):
+            images = get_email_images(msg)
+            if not is_ticket_email(subject, email_text) and not images:
                 seen.add(eid_str)
                 continue
             try:
-                result = await parse_email_with_claude(email_text, subject)
+                # Если есть изображения — передаём первое в Claude вместе с текстом
+                if images:
+                    img_data, img_mime = images[0]
+                    result = await parse_ticket_with_claude(
+                        text=(f"Тема письма: {subject}\n\n{email_text}" if email_text.strip() else None),
+                        image_data=img_data,
+                        image_mime=img_mime
+                    )
+                    # parse_ticket_with_claude возвращает формат add, конвертируем в email формат
+                    if result.get("action") == "add" and result.get("ticket"):
+                        result = {"is_ticket": True, "ticket": result["ticket"]}
+                    else:
+                        result = {"is_ticket": False}
+                else:
+                    result = await parse_email_with_claude(email_text, subject)
                 if result.get("is_ticket") and result.get("ticket"):
                     t = result["ticket"]
                     rates = get_cbar_rates()
