@@ -14,6 +14,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import asyncio
+import psycopg2
+import psycopg2.extras
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,8 +26,26 @@ ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "0"))
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD", "")
 
-DATA_FILE = "tickets.json"
-SEEN_EMAILS_FILE = "seen_emails.json"
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+def get_db():
+    return psycopg2.connect(DATABASE_URL)
+
+def init_db():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id BIGINT PRIMARY KEY,
+                    data JSONB NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS seen_emails (
+                    email_id TEXT PRIMARY KEY
+                )
+            """)
+        conn.commit()
 
 TICKET_KEYWORDS = ["ticket", "билет", "eticket", "e-ticket", "itinerary", "booking confirmation",
                    "flight confirmation", "маршрут", "бронирование", "azerbaijan airlines",
@@ -122,27 +142,52 @@ def convert_to_azn(amount, currency, rates):
 
 
 def load_tickets():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+    try:
+        with get_db() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT data FROM tickets ORDER BY (data->>'id')::bigint")
+                return [dict(row['data']) for row in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"load_tickets error: {e}")
+        return []
 
 
 def save_tickets(tickets):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(tickets, f, ensure_ascii=False, indent=2)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM tickets")
+                for t in tickets:
+                    cur.execute(
+                        "INSERT INTO tickets (id, data) VALUES (%s, %s)",
+                        (t['id'], json.dumps(t, ensure_ascii=False))
+                    )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"save_tickets error: {e}")
 
 
 def load_seen_emails():
-    if os.path.exists(SEEN_EMAILS_FILE):
-        with open(SEEN_EMAILS_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT email_id FROM seen_emails")
+                return set(row[0] for row in cur.fetchall())
+    except Exception as e:
+        logger.error(f"load_seen_emails error: {e}")
+        return set()
 
 
 def save_seen_emails(seen):
-    with open(SEEN_EMAILS_FILE, "w") as f:
-        json.dump(list(seen), f)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM seen_emails")
+                for eid in seen:
+                    cur.execute("INSERT INTO seen_emails (email_id) VALUES (%s)", (eid,))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"save_seen_emails error: {e}")
 
 
 def fmt_date(d):
@@ -746,6 +791,8 @@ async def post_init(application):
 
 
 def main():
+    init_db()
+    logger.info("Database initialized")
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
