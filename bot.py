@@ -378,7 +378,7 @@ def generate_excel(tickets):
         price_azn = float(t.get("price_azn", t.get("price", 0)))
         cu = float(t.get("cu", 0))
         ca = float(t.get("ca", 0))
-        owes_us = price_azn + cu
+        owes_us = price_azn + cu + ca
         owes_ag = price_azn + ca
         total_us += owes_us
         total_ag += owes_ag
@@ -554,7 +554,7 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
             price_azn = float(tickets[i].get("price_azn", tickets[i].get("price", 0)))
             cu = float(tickets[i].get("cu", 0))
             ca = float(tickets[i].get("ca", 0))
-            tickets[i]["owesUs"] = price_azn + cu
+            tickets[i]["owesUs"] = price_azn + cu + ca
             tickets[i]["owesAgent"] = price_azn + ca
         save_tickets(tickets)
         field_names = {"status": "статус", "company": "компания", "price": "цена", "cu": "ком. наша", "ca": "ком. агента", "route": "маршрут", "date": "дата"}
@@ -587,7 +587,7 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
                 for i in indices:
                     existing[i].update(fields)
                     price_azn = float(existing[i].get("price_azn", existing[i].get("price", 0)))
-                    existing[i]["owesUs"] = price_azn + float(existing[i].get("cu", 0))
+                    existing[i]["owesUs"] = price_azn + float(existing[i].get("cu", 0)) + float(existing[i].get("ca", 0))
                     existing[i]["owesAgent"] = price_azn + float(existing[i].get("ca", 0))
                 save_tickets(existing)
                 field_names = {"cu": "ком. наша", "ca": "ком. агента", "company": "компания"}
@@ -608,7 +608,7 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
         ca = float(t.get("ca", 0))
         rates = get_cbar_rates()
         price_azn, rate = convert_to_azn(price_orig, currency, rates)
-        owes_us = price_azn + cu
+        owes_us = price_azn + cu + ca
         owes_ag = price_azn + ca
         ticket = {
             "id": int(datetime.now().timestamp() * 1000),
