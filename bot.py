@@ -533,6 +533,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не смог распознать билет. Попробуйте отправить текстом.")
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
+    doc = update.message.document
+    if not doc or not doc.mime_type or not doc.mime_type.startswith("image/"):
+        await update.message.reply_text("Пожалуйста, отправьте изображение билета.")
+        return
+    await update.message.reply_text("Обрабатываю билет, подождите...")
+    file = await doc.get_file()
+    file_bytes = await file.download_as_bytearray()
+    image_data = base64.standard_b64encode(file_bytes).decode("utf-8")
+    caption = update.message.caption or ""
+    try:
+        result = await parse_ticket_with_claude(text=caption if caption else None, image_data=image_data, image_mime=doc.mime_type)
+        await process_result(update, context, result)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await update.message.reply_text("Не смог распознать билет. Попробуйте отправить текстом.")
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
@@ -824,6 +844,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     logger.info("Bot started with Gmail monitoring...")
     app.run_polling()
