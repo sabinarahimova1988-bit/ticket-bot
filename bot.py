@@ -601,9 +601,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if name:
             text = f"{name} {route} {text}".strip()
 
+    # Если это reply на сообщение бота — добавляем контекст из того сообщения
+    context_text = ""
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        replied = update.message.reply_to_message.text
+        # Ищем имя и маршрут в сообщении бота (формат: "Имя · Маршрут")
+        import re
+        match = re.search(r'[*]?([A-Za-z]+ [A-Za-z]+)[*]? [·] ([A-Za-z]+-[A-Za-z]+)', replied)
+        if match:
+            context_text = f"Пассажир: {match.group(1)}, маршрут: {match.group(2)}. "
+
     await update.message.reply_text("Обрабатываю...")
     try:
-        result = await parse_ticket_with_claude(text=text)
+        full_text = context_text + text if context_text else text
+        result = await parse_ticket_with_claude(text=full_text)
         await process_result(update, context, result)
     except Exception as e:
         logger.error(f"Error: {e}")
@@ -668,6 +679,17 @@ async def process_result(update: Update, context: ContextTypes.DEFAULT_TYPE, res
             await update.message.reply_text("❌ Не указано что именно изменить.")
             return
         rates = get_cbar_rates()
+        # Если в fields есть price_add — добавляем к существующей цене
+        if "price_add" in fields:
+            add_amount = float(fields.pop("price_add"))
+            add_currency = fields.pop("currency", "AZN")
+            add_azn, _ = convert_to_azn(add_amount, add_currency, rates)
+            for i in indices:
+                old_price = float(tickets[i].get("price_azn", tickets[i].get("price", 0)))
+                new_price = old_price + add_azn
+                tickets[i]["price_azn"] = new_price
+                tickets[i]["price"] = new_price
+                tickets[i]["price_orig"] = new_price
         for i in indices:
             for field, value in fields.items():
                 tickets[i][field] = value
