@@ -922,24 +922,21 @@ async def email_check_job(bot: Bot):
             await asyncio.sleep(30)
 
 
+async def post_init(application):
+    asyncio.get_event_loop().create_task(email_check_job(application.bot))
+    logger.info("IMAP IDLE task started")
+
+
 def main():
     init_db()
     logger.info("Database initialized")
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    async def run():
-        await app.initialize()
-        await app.start()
-        logger.info("Bot started with Gmail monitoring...")
-        asyncio.create_task(email_check_job(app.bot))
-        await app.updater.start_polling()
-        await asyncio.Event().wait()
-
-    asyncio.run(run())
+    logger.info("Bot started with Gmail monitoring...")
+    app.run_polling()
 
 
 if __name__ == "__main__":
